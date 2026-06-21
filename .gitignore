@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+.DS_Store
 
 # 含個資的 Excel/CSV 與暫存檔，絕對不要上傳到公開 repo
 *.xlsx
