@@ -111,6 +111,46 @@
   .err { color: var(--hot); font-size: 14px; margin-top: 12px; }
   footer { text-align:center; color:var(--muted); font-size:12px; margin-top:40px; }
   .reset { background:none; border:none; color:var(--brand); cursor:pointer; font-size:13px; }
+  /* view toggle */
+  .sec-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:26px 0 12px; }
+  .sec-head h3.sec { margin:0; }
+  .viewtoggle { display:inline-flex; background:#f1f5f9; border-radius:10px; padding:3px; gap:2px; }
+  .viewtoggle button { border:none; background:none; padding:7px 14px; border-radius:8px; font-size:13px; font-weight:600; color:var(--muted); cursor:pointer; }
+  .viewtoggle button.active { background:#fff; color:var(--brand); box-shadow:0 1px 2px rgba(15,23,42,.12); }
+  /* calendar */
+  .cal-month { font-size:15px; font-weight:700; margin-bottom:10px; }
+  .cal { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+  .cal .dowh { text-align:center; font-size:11px; font-weight:600; color:var(--muted); padding:2px 0; }
+  .cal .dowh.we { color:#94a3b8; }
+  .cell { aspect-ratio:1/1; border:1px solid var(--line); border-radius:9px; padding:4px 4px 5px; display:flex; flex-direction:column; background:#fff; position:relative; cursor:pointer; transition:transform .1s; }
+  .cell:active { transform:scale(.96); }
+  .cell.empty { border:none; background:none; cursor:default; }
+  .cell.muted { background:#f8fafc; cursor:default; }
+  .cell.muted .dnum { color:#cbd5e1; }
+  .cell .dnum { font-size:12px; font-weight:600; color:var(--ink); }
+  .cell .cnt { margin-top:auto; font-size:16px; font-weight:800; line-height:1; }
+  .cell .cnt small { font-size:9px; font-weight:600; color:var(--muted); }
+  .cell.mine { outline:2px solid var(--mine); outline-offset:-2px; }
+  .cell .mymark { position:absolute; top:3px; right:4px; font-size:10px; color:var(--mine); font-weight:800; }
+  .cal-legend { display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:14px; font-size:12px; color:var(--muted); align-items:center; }
+  .cal-legend i { display:inline-block; width:14px; height:14px; border-radius:4px; vertical-align:-2px; margin-right:4px; }
+  /* day popup */
+  .daypop-bg { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:20px; z-index:50; }
+  .daypop { background:#fff; border-radius:16px; padding:20px 20px 18px; width:100%; max-width:320px; box-shadow:0 20px 50px rgba(15,23,42,.3); }
+  .daypop h4 { margin:0 0 4px; font-size:20px; }
+  .daypop .sub { margin-bottom:14px; }
+  .daypop .big { font-size:15px; margin-bottom:12px; }
+  .daypop .big b { font-size:22px; }
+  .daypop .types { font-size:13px; color:var(--ink); line-height:1.9; }
+  .daypop .mine-line { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); font-size:13px; color:var(--mine); font-weight:700; }
+  .daypop .closebtn { margin-top:16px; width:100%; padding:10px; border:1px solid var(--line); background:#f8fafc; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; color:var(--ink); }
+  @media (max-width:480px) {
+    .daypop-bg { align-items:flex-end; padding:0; }
+    .daypop { max-width:none; border-radius:18px 18px 0 0; padding-bottom:28px; }
+    .cal { gap:4px; }
+    .cell { border-radius:8px; padding:3px; }
+    .cell .cnt { font-size:14px; }
+  }
 </style>
 </head>
 <body>
@@ -158,8 +198,27 @@
     <div class="mydays" id="myDays"></div>
     <div class="meta" id="myDaysNote"></div>
 
-    <h3 class="sec">📊 完整每日統計（只計算排在你前面的人）</h3>
-    <table id="allTbl">
+    <div class="sec-head">
+      <h3 class="sec">📊 每日選擇狀況（只計算排在你前面的人）</h3>
+      <div class="viewtoggle" id="viewToggle">
+        <button type="button" data-v="calendar" class="active">📅 月曆</button>
+        <button type="button" data-v="table">📊 表格</button>
+      </div>
+    </div>
+
+    <div id="calWrap">
+      <div class="cal-month" id="calMonth"></div>
+      <div class="cal" id="cal"></div>
+      <div class="cal-legend">
+        <span><i style="background:#dcfce7"></i>前面 0～少數（相對安全）</span>
+        <span><i style="background:#fef3c7"></i>偏熱門</span>
+        <span><i style="background:#fee2e2"></i>競爭激烈</span>
+        <span><i style="outline:2px solid var(--mine);outline-offset:-2px;background:#fff"></i>我選的日子</span>
+      </div>
+      <div class="meta" id="calNote"></div>
+    </div>
+
+    <table id="allTbl" class="hidden">
       <thead>
         <tr>
           <th class="sortable" data-k="date">日期</th>
@@ -176,6 +235,10 @@
   <footer>
     純前端工具 · 資料不離開你的裝置 · 可直接雙擊開啟或部署到 GitHub Pages / Netlify
   </footer>
+</div>
+
+<div id="dayPopBg" class="daypop-bg hidden">
+  <div class="daypop" id="dayPop"></div>
 </div>
 
 <script>
@@ -371,8 +434,18 @@ function computeFor(idx) {
   $("#myDaysNote").textContent =
     "說明：人數越多代表越多比你優先的人也想休這天，被排擠的風險越高（實際是否准假仍依各日名額而定）。";
 
-  // 完整表格
-  renderTable(aheadCount, maxAhead, new Set(me.days.keys()), ahead.length, yearGuess);
+  // 每個日期：前面的人各用哪種假別選的
+  const aheadType = {};
+  for (const p of ahead) {
+    for (const [d, types] of p.days) {
+      if (!aheadType[d]) aheadType[d] = new Map();
+      for (const t of types) aheadType[d].set(t, (aheadType[d].get(t) || 0) + 1);
+    }
+  }
+
+  const myset = new Set(me.days.keys());
+  renderCalendar(aheadCount, aheadType, myset, ahead.length, yearGuess, me);
+  renderTable(aheadCount, maxAhead, myset, ahead.length, yearGuess);
   $("#cardResult").classList.remove("hidden");
   $("#cardResult").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -416,6 +489,90 @@ function renderTable(aheadCount, maxAhead, myset, aheadTotal, year) {
     tbody.appendChild(tr);
   }
 }
+
+/* ---------- 月曆熱力圖 ---------- */
+function renderCalendar(aheadCount, aheadType, myset, aheadTotal, year, me) {
+  const cal = $("#cal");
+  // 主要月份：取資料中出現最多日期的合法月份
+  const monthCount = {};
+  for (const d of ALLDATES) {
+    const [m, day] = d.split("/").map(Number);
+    if (m >= 1 && m <= 12 && day >= 1 && day <= 31) monthCount[m] = (monthCount[m] || 0) + 1;
+  }
+  const months = Object.keys(monthCount).map(Number).sort((a, b) => monthCount[b] - monthCount[a]);
+  if (!months.length) {
+    cal.innerHTML = ""; $("#calMonth").textContent = ""; $("#calNote").textContent = "";
+    return;
+  }
+  const month = months[0];
+  $("#calMonth").textContent = `${year} 年 ${month} 月`;
+
+  const firstDow = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const picked = new Set(ALLDATES); // 有任何人選過的日子
+
+  let html = DOW.map((w, i) => `<div class="dowh${(i === 0 || i === 6) ? " we" : ""}">${w}</div>`).join("");
+  for (let i = 0; i < firstDow; i++) html += '<div class="cell empty"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const md = month + "/" + day;
+    const active = picked.has(md);
+    const mine = myset.has(md);
+    if (!active && !mine) {
+      html += `<div class="cell muted"><div class="dnum">${day}</div></div>`;
+      continue;
+    }
+    const n = aheadCount[md] || 0;
+    const lvl = level(n, aheadTotal);
+    const tint = lvl.cls === "b-hot" ? "#fee2e2" : lvl.cls === "b-warm" ? "#fef3c7" : "#dcfce7";
+    html += `<div class="cell${mine ? " mine" : ""}" style="background:${tint}" data-md="${md}">
+      ${mine ? '<span class="mymark">✓</span>' : ""}
+      <div class="dnum">${day}</div>
+      <div class="cnt" style="color:${lvl.color}">${n}<small>人</small></div>
+    </div>`;
+  }
+  cal.innerHTML = html;
+
+  if (months.length > 1) {
+    const others = months.slice(1).map((m) => `${m} 月`).join("、");
+    $("#calNote").textContent = `另有 ${others} 的少數日期未在此月曆顯示，可切換「表格」檢視全部。點任一天可看假別分布。`;
+  } else {
+    $("#calNote").textContent = "點任一天可看假別分布與排在你前面的選擇人數。";
+  }
+
+  cal.querySelectorAll(".cell[data-md]").forEach((c) => {
+    c.addEventListener("click", () =>
+      showDayPop(c.dataset.md, aheadCount, aheadType, myset, aheadTotal, year, me));
+  });
+}
+
+function showDayPop(md, aheadCount, aheadType, myset, aheadTotal, year, me) {
+  const n = aheadCount[md] || 0;
+  const lvl = level(n, aheadTotal);
+  let typesHtml;
+  if (n === 0) {
+    typesHtml = '<div class="types">排在你前面還沒有人選這天 ✅</div>';
+  } else {
+    const tmap = aheadType[md] || new Map();
+    const parts = [...tmap.entries()].sort((a, b) => b[1] - a[1])
+      .map(([t, c]) => `<span class="pill-type">${t} ×${c}</span>`).join("");
+    typesHtml = `<div class="types">前面這些人使用的假別：<br>${parts}</div>`;
+  }
+  let mineLine = "";
+  if (myset.has(md)) {
+    const myTypes = me.days.has(md) ? [...me.days.get(md)].join("、") : "";
+    mineLine = `<div class="mine-line">✓ 你選了這天${myTypes ? "（" + myTypes + "）" : ""}</div>`;
+  }
+  $("#dayPop").innerHTML = `
+    <h4>${md} <span style="font-size:14px;color:var(--muted)">(週${dowOf(md, year)})</span></h4>
+    <div class="sub"><span class="badge ${lvl.cls}">${lvl.text}</span></div>
+    <div class="big">排在你前面有 <b style="color:${lvl.color}">${n}</b> 人也選了這天</div>
+    ${typesHtml}
+    ${mineLine}
+    <button type="button" class="closebtn" id="dayPopClose">關閉</button>`;
+  $("#dayPopBg").classList.remove("hidden");
+  $("#dayPopClose").addEventListener("click", hideDayPop);
+}
+function hideDayPop() { $("#dayPopBg").classList.add("hidden"); }
 
 /* ---------- 事件 ---------- */
 const drop = $("#drop"), fileInput = $("#file");
@@ -469,6 +626,19 @@ $("#reload").addEventListener("click", () => {
   $("#cardResult").classList.add("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
+
+// 月曆 / 表格 切換
+document.querySelectorAll("#viewToggle button").forEach((b) => {
+  b.addEventListener("click", () => {
+    const v = b.dataset.v;
+    document.querySelectorAll("#viewToggle button").forEach((x) => x.classList.toggle("active", x === b));
+    $("#calWrap").classList.toggle("hidden", v !== "calendar");
+    $("#allTbl").classList.toggle("hidden", v !== "table");
+  });
+});
+
+// 日期彈窗：點背景關閉
+$("#dayPopBg").addEventListener("click", (e) => { if (e.target.id === "dayPopBg") hideDayPop(); });
 
 // 表頭排序
 document.querySelectorAll("#allTbl th.sortable").forEach((th) => {
