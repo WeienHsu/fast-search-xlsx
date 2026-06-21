@@ -9,7 +9,13 @@ wheels/
 # Virtual environments
 .venv
 
-# 含個資的 Excel 與暫存檔，絕對不要上傳到公開 repo
+# 含個資的 Excel/CSV 與暫存檔，絕對不要上傳到公開 repo
 *.xlsx
 *.xls
+*.csv
+*.tsv
 ~$*
+
+/CLAUDE.md
+/AGENTS.md
+/GEMINI.md
