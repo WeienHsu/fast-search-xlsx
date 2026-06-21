@@ -254,17 +254,111 @@ const $ = (s) => document.querySelector(s);
 const DOW = ["日","一","二","三","四","五","六"];
 
 /* ---------- 工具 ---------- */
-// 從一格文字抓出所有 M/D 日期，回傳 ["7/25", ...]
-function extractDates(val) {
+// 從一段文字抓出所有 M/D 日期，回傳 ["7/25", ...]（純比對，不做任何排除）
+function matchDates(val) {
   if (val == null) return [];
   const s = String(val);
-  if (s.includes("無此項需求")) return [];
   const out = [];
   const re = /(\d{1,2})\s*\/\s*(\d{1,2})/g;
   let m;
   while ((m = re.exec(s)) !== null) {
     out.push(m[1] + "/" + m[2]);
   }
+  return out;
+}
+
+// 取得某個儲存格「有效」的日期：
+//  1. 含「不受理」或「暫停」整格作廢 → []
+//  2. 整格被劃刪除線（struckSet）→ []
+//  3. 格內部分文字被劃刪除線（cell.h 的 <s>…</s>）→ 排除那幾天，保留其餘
+function cellDates(ws, R, C, struckSet) {
+  const addr = XLSX.utils.encode_cell({ r: R, c: C });
+  const cell = ws[addr];
+  if (!cell || cell.v == null) return [];
+  const text = String(cell.v);
+  if (text.includes("不受理") || text.includes("暫停")) return [];
+  if (struckSet.has(addr)) return [];
+  const struck = new Set();
+  if (cell.h && cell.h.indexOf("<s>") >= 0) {
+    (cell.h.match(/<s>[\s\S]*?<\/s>/g) || [])
+      .forEach((seg) => matchDates(seg).forEach((d) => struck.add(d)));
+  }
+  return matchDates(text).filter((d) => !struck.has(d));
+}
+
+/* ---------- 讀取整格刪除線（SheetJS 不解析字型，需自行解 zip/XML） ---------- */
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream("deflate-raw");
+  const stream = new Response(bytes).body.pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function readZipEntry(arrbuf, name) {
+  const dv = new DataView(arrbuf);
+  const u8 = new Uint8Array(arrbuf);
+  const dec = new TextDecoder();
+  let eocd = -1;
+  for (let p = arrbuf.byteLength - 22; p >= 0; p--) {
+    if (dv.getUint32(p, true) === 0x06054b50) { eocd = p; break; }
+  }
+  if (eocd < 0) return null;
+  let cd = dv.getUint32(eocd + 16, true);
+  const total = dv.getUint16(eocd + 10, true);
+  for (let i = 0; i < total; i++) {
+    if (dv.getUint32(cd, true) !== 0x02014b50) return null;
+    const method = dv.getUint16(cd + 10, true);
+    const compSize = dv.getUint32(cd + 20, true);
+    const nameLen = dv.getUint16(cd + 28, true);
+    const extraLen = dv.getUint16(cd + 30, true);
+    const commLen = dv.getUint16(cd + 32, true);
+    const lho = dv.getUint32(cd + 42, true);
+    const fn = dec.decode(u8.subarray(cd + 46, cd + 46 + nameLen));
+    if (fn === name) {
+      const lNameLen = dv.getUint16(lho + 26, true);
+      const lExtraLen = dv.getUint16(lho + 28, true);
+      const dataStart = lho + 30 + lNameLen + lExtraLen;
+      const comp = u8.subarray(dataStart, dataStart + compSize);
+      const raw = method === 0 ? comp : await inflateRaw(comp);
+      return dec.decode(raw);
+    }
+    cd = cd + 46 + nameLen + extraLen + commLen;
+  }
+  return null;
+}
+// 回傳「整格被劃刪除線」的儲存格位址集合（如 "F98"）。失敗則回空集合（run-level 仍有效）。
+async function findStruckCells(arrbuf) {
+  const out = new Set();
+  try {
+    const styles = await readZipEntry(arrbuf, "xl/styles.xml");
+    if (!styles) return out;
+    // 找第一個工作表的實際檔名
+    let sheetPath = "xl/worksheets/sheet1.xml";
+    const wbxml = await readZipEntry(arrbuf, "xl/workbook.xml");
+    const rels = await readZipEntry(arrbuf, "xl/_rels/workbook.xml.rels");
+    if (wbxml && rels) {
+      const idm = wbxml.match(/<sheet[^>]*r:id="([^"]+)"/);
+      if (idm) {
+        const tm = rels.match(new RegExp('Id="' + idm[1] + '"[^>]*Target="([^"]+)"'));
+        if (tm) { const t = tm[1].replace(/^\//, ""); sheetPath = t.startsWith("xl/") ? t : "xl/" + t; }
+      }
+    }
+    const sheet = await readZipEntry(arrbuf, sheetPath);
+    if (!sheet) return out;
+    const fb = styles.match(/<fonts[\s\S]*?<\/fonts>/);
+    const xb = styles.match(/<cellXfs[\s\S]*?<\/cellXfs>/);
+    if (!fb || !xb) return out;
+    const strikeFonts = new Set();
+    (fb[0].match(/<font>[\s\S]*?<\/font>|<font\/>/g) || [])
+      .forEach((f, i) => { if (/<strike\/>/.test(f)) strikeFonts.add(i); });
+    const strikeXf = new Set();
+    (xb[0].match(/<xf[\s\S]*?(?:\/>|<\/xf>)/g) || [])
+      .forEach((xf, i) => { const m = xf.match(/fontId="(\d+)"/); if (m && strikeFonts.has(+m[1])) strikeXf.add(i); });
+    if (!strikeXf.size) return out;
+    const cellRe = /<c r="([A-Z]+\d+)"(?:[^>]*\bs="(\d+)")?[^>]*?(?:\/>|>)/g;
+    let m;
+    while ((m = cellRe.exec(sheet))) {
+      if (m[2] != null && strikeXf.has(+m[2])) out.add(m[1]);
+    }
+  } catch (e) { /* 解析失敗 → run-level 仍有效 */ }
   return out;
 }
 function dateKey(md) { // "7/25" -> 725 方便排序
@@ -279,14 +373,21 @@ function dowOf(md, year) {
 }
 
 /* ---------- 解析 Excel ---------- */
-function parseWorkbook(arrbuf) {
+async function parseWorkbook(arrbuf) {
   const wb = XLSX.read(arrbuf, { type: "array", cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
   if (!rows.length) throw new Error("檔案是空的。");
+  // sheet_to_json 的列索引與工作表 row 對齊（rows[k] = 第 k 列，0-based）
+  const struckSet = await findStruckCells(arrbuf);
 
   const header = rows[0].map((h) => (h == null ? "" : String(h).trim()));
-  const body = rows.slice(1).filter((r) => r.some((c) => c != null && String(c).trim() !== ""));
+  // body 保留原始工作表列號 R（用於對位 cell.h 與刪除線）
+  const body = [];
+  for (let R = 1; R < rows.length; R++) {
+    const cells = rows[R];
+    if (cells && cells.some((c) => c != null && String(c).trim() !== "")) body.push({ R, cells });
+  }
   if (!body.length) throw new Error("找不到任何資料列。");
 
   // 欄位偵測
@@ -298,46 +399,47 @@ function parseWorkbook(arrbuf) {
 
   if (nameCol < 0) throw new Error("找不到「姓名」欄位，請確認這是預選休假表單檔。");
 
-  // 日期欄：欄內多數格子含有日期樣式（排除時間戳記欄）
+  // 日期欄：跳過 meta 欄（時間戳記/姓名/工號/email，這些可能夾帶截止日等附註），
+  // 其餘欄位只要有 ≥1 格含日期就視為日期欄。
+  const metaCols = new Set([tsCol, nameCol, idCol, emailCol]);
   const dayCols = [];
   for (let c = 0; c < header.length; c++) {
-    if (c === tsCol) continue;
-    let hit = 0, nonEmpty = 0;
-    for (const r of body) {
-      const v = r[c];
-      if (v == null || String(v).trim() === "") continue;
-      nonEmpty++;
-      if (extractDates(v).length) hit++;
-    }
-    if (hit >= 3 && hit >= nonEmpty * 0.05) {
-      dayCols.push({ col: c, label: shortLabel(header[c]) });
-    }
+    if (metaCols.has(c)) continue;
+    let hit = 0;
+    for (const { cells } of body) if (matchDates(cells[c]).length) hit++;
+    if (hit >= 1) dayCols.push({ col: c, label: shortLabel(header[c]) });
   }
   if (!dayCols.length) throw new Error("找不到任何含日期的欄位（預選休假/特休/補休）。");
 
   COLINFO = { tsCol, nameCol, idCol, emailCol, dayCols };
 
-  // 建立人員 (保留原始列序 = 順位)
-  const raw = body.map((r, i) => {
-    // 收集此人所有日期，記住來源類型
+  // 建立人員 (保留原始列序 = 順位)；整列被劃刪除線者（姓名格被劃）整筆作廢
+  let voidRows = 0;
+  const raw = body.map(({ R, cells }, i) => {
+    if (struckSet.has(XLSX.utils.encode_cell({ r: R, c: nameCol }))) { voidRows++; return null; }
+    // 收集此人所有有效日期，記住來源類型
     const dayMap = new Map(); // "7/25" -> Set(types)
     for (const dc of dayCols) {
-      for (const md of extractDates(r[dc.col])) {
+      for (const md of cellDates(ws, R, dc.col, struckSet)) {
         if (!dayMap.has(md)) dayMap.set(md, new Set());
         dayMap.get(md).add(dc.label);
       }
     }
-    let ts = tsCol >= 0 ? r[tsCol] : null;
+    // 預選休假優先：同一天若同時出現在預選休假與其他假別，只歸預選休假（不重複計）
+    for (const [md, types] of dayMap) {
+      if (types.size > 1 && types.has("預選休假")) dayMap.set(md, new Set(["預選休假"]));
+    }
+    let ts = tsCol >= 0 ? cells[tsCol] : null;
     ts = ts instanceof Date ? ts.getTime() : (ts != null ? Date.parse(ts) : NaN);
     return {
       order: i,
-      name: nameCol >= 0 ? safeStr(r[nameCol]) : "",
-      id: idCol >= 0 ? safeStr(r[idCol]) : "",
-      email: emailCol >= 0 ? safeStr(r[emailCol]).toLowerCase() : "",
+      name: nameCol >= 0 ? safeStr(cells[nameCol]) : "",
+      id: idCol >= 0 ? safeStr(cells[idCol]) : "",
+      email: emailCol >= 0 ? safeStr(cells[emailCol]).toLowerCase() : "",
       ts: isNaN(ts) ? null : ts,
       days: dayMap,
     };
-  }).filter((p) => p.name);
+  }).filter((p) => p && p.name);
 
   // 去重：以 email > 工號 > 姓名 為鍵，保留時間最新者；位置取最新那筆的列序
   const byKey = new Map();
@@ -357,17 +459,17 @@ function parseWorkbook(arrbuf) {
   for (const p of PEOPLE) for (const d of p.days.keys()) ds.add(d);
   ALLDATES = [...ds].sort((a, b) => dateKey(a) - dateKey(b));
 
-  return { total: raw.length, kept: PEOPLE.length, dupRemoved };
+  return { total: raw.length, kept: PEOPLE.length, dupRemoved, voidRows };
 }
 function safeStr(v) { return v == null ? "" : String(v).trim(); }
 function shortLabel(h) {
   if (!h) return "其他";
+  const m = h.match(/\[(.+?)\]/);
+  if (m) return m[1];                                  // 方括號內才是真正的子選項（特休/福利補休/加班補休…）
+  if (h.includes("預選休假") || /^1\./.test(h)) return "預選休假";
   if (h.includes("特休")) return "特休";
   if (h.includes("福利")) return "福利補休";
   if (h.includes("加班")) return "加班補休";
-  if (h.includes("預選休假") || /^1\./.test(h)) return "預選休假";
-  const m = h.match(/\[(.+?)\]/);
-  if (m) return m[1];
   return h.length > 8 ? h.slice(0, 8) + "…" : h;
 }
 
@@ -588,16 +690,17 @@ fileInput.addEventListener("change", (e) => { if (e.target.files.length) handleF
 function handleFile(file) {
   $("#loadErr").classList.add("hidden");
   const reader = new FileReader();
-  reader.onload = (ev) => {
+  reader.onload = async (ev) => {
     try {
-      const info = parseWorkbook(ev.target.result);
+      const info = await parseWorkbook(ev.target.result);
       fillNameSelect();
       $("#cardPick").classList.remove("hidden");
       $("#cardResult").classList.add("hidden");
       const typeList = COLINFO.dayCols.map((d) => d.label).join("、");
+      const voidNote = info.voidRows ? `，剔除整筆作廢（劃刪除線）${info.voidRows} 筆` : "";
       $("#loadMeta").innerHTML =
-        `已載入 <b>${info.kept}</b> 人（原始 ${info.total} 筆，去除重複 ${info.dupRemoved} 筆）。` +
-        `偵測到日期欄位：${typeList}。`;
+        `已載入 <b>${info.kept}</b> 人（原始 ${info.total} 筆，去除重複 ${info.dupRemoved} 筆${voidNote}）。` +
+        `偵測到日期欄位：${typeList}。已自動排除被劃刪除線的日期與標註「不受理」的格子。`;
       $("#nameSel").focus();
     } catch (err) {
       const box = $("#loadErr");
