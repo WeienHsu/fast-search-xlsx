@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>預選休假｜順位前統計工具</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #ffffff;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --brand: #2563eb;
+    --brand-soft: #eff6ff;
+    --hot: #dc2626;
+    --warm: #f59e0b;
+    --cool: #16a34a;
+    --mine: #7c3aed;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC",
+                 "Microsoft JhengHei", "Noto Sans TC", Roboto, sans-serif;
+    color: var(--ink);
+    background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .5px; }
+  header.hero p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 22px;
+    margin-top: 22px;
+  }
+  /* dropzone */
+  #drop {
+    border: 2px dashed #cbd5e1;
+    border-radius: 14px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: .18s;
+    background: #f8fafc;
+  }
+  #drop.drag { border-color: var(--brand); background: var(--brand-soft); }
+  #drop .big { font-size: 40px; line-height: 1; }
+  #drop .t1 { font-weight: 600; margin-top: 10px; }
+  #drop .t2 { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .privacy {
+    margin-top: 12px; font-size: 12px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px; justify-content: center;
+  }
+  /* controls */
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .field { flex: 1; min-width: 240px; }
+  label.lbl { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  select, input[type=search] {
+    width: 100%; padding: 11px 12px; border: 1px solid var(--line);
+    border-radius: 10px; font-size: 15px; background: #fff; color: var(--ink);
+  }
+  select:focus, input:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .hidden { display: none !important; }
+  /* result header */
+  .ribbon {
+    display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 6px;
+  }
+  .stat {
+    flex: 1; min-width: 150px; background: var(--brand-soft);
+    border: 1px solid #dbeafe; border-radius: 12px; padding: 14px 16px;
+  }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 22px; font-weight: 700; margin-top: 2px; }
+  .stat .v small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  h3.sec { font-size: 16px; margin: 26px 0 12px; }
+  /* my-day cards */
+  .mydays { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px,1fr)); gap: 12px; }
+  .day {
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+    position: relative; overflow: hidden;
+  }
+  .day .date { font-size: 17px; font-weight: 700; }
+  .day .dow { color: var(--muted); font-size: 12px; font-weight: 500; }
+  .day .ahead { margin-top: 8px; font-size: 13px; }
+  .day .ahead b { font-size: 20px; }
+  .day .bar { height: 6px; border-radius: 6px; background: #f1f5f9; margin-top: 10px; overflow: hidden; }
+  .day .bar > i { display: block; height: 100%; border-radius: 6px; }
+  .badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; color:#fff; }
+  .b-hot { background: var(--hot); }
+  .b-warm { background: var(--warm); }
+  .b-cool { background: var(--cool); }
+  .pill-type { display:inline-block; font-size:11px; color:var(--muted); background:#f1f5f9; padding:1px 7px; border-radius:999px; margin:2px 4px 0 0; }
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--brand); }
+  tr.mine td { background: #faf5ff; }
+  .tag-mine { color: var(--mine); font-weight: 700; font-size: 11px; }
+  .minibar { display:flex; align-items:center; gap:8px; }
+  .minibar > span { display:inline-block; height:8px; border-radius:8px; background:#cbd5e1; min-width:2px; }
+  .err { color: var(--hot); font-size: 14px; margin-top: 12px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; margin-top:40px; }
+  .reset { background:none; border:none; color:var(--brand); cursor:pointer; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>📋 預選休假 · 順位前統計</h1>
+    <p>上傳每月的預選休假 Excel，選擇你的名字，立刻看出排在你前面的人把哪些日子選走了。</p>
+  </header>
+
+  <!-- Step 1: upload -->
+  <div class="card" id="cardUpload">
+    <div id="drop">
+      <div class="big">📂</div>
+      <div class="t1">點擊或拖曳 Excel 檔到這裡</div>
+      <div class="t2">支援 .xlsx / .xls（Google 表單回覆匯出檔）</div>
+      <input type="file" id="file" accept=".xlsx,.xls" class="hidden" />
+    </div>
+    <div class="privacy">🔒 檔案只在你的瀏覽器內處理，<b>不會上傳到任何伺服器</b>。</div>
+    <div id="loadErr" class="err hidden"></div>
+  </div>
+
+  <!-- Step 2: pick name -->
+  <div class="card hidden" id="cardPick">
+    <div class="row">
+      <div class="field">
+        <label class="lbl" for="nameSel">選擇你的名字</label>
+        <select id="nameSel"></select>
+      </div>
+      <div style="padding-bottom:2px">
+        <button class="reset" id="reload">↺ 換一個檔案</button>
+      </div>
+    </div>
+    <div class="meta" id="loadMeta"></div>
+  </div>
+
+  <!-- Step 3: result -->
+  <div class="card hidden" id="cardResult">
+    <div class="ribbon">
+      <div class="stat"><div class="k">你的順位</div><div class="v" id="stPos">—</div></div>
+      <div class="stat"><div class="k">你選的天數</div><div class="v" id="stDays">—</div></div>
+      <div class="stat"><div class="k">最熱門的衝突日</div><div class="v" id="stHot">—</div></div>
+    </div>
+
+    <h3 class="sec">🎯 你選的每一天（排在你前面有幾人也選同一天）</h3>
+    <div class="mydays" id="myDays"></div>
+    <div class="meta" id="myDaysNote"></div>
+
+    <h3 class="sec">📊 完整每日統計（只計算排在你前面的人）</h3>
+    <table id="allTbl">
+      <thead>
+        <tr>
+          <th class="sortable" data-k="date">日期</th>
+          <th class="sortable" data-k="dow">星期</th>
+          <th class="sortable" data-k="ahead">前面選此日人數 ▾</th>
+          <th>分布</th>
+          <th class="sortable" data-k="mine">我有選</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <footer>
+    純前端工具 · 資料不離開你的裝置 · 可直接雙擊開啟或部署到 GitHub Pages / Netlify
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- 狀態 ---------- */
+let PEOPLE = [];      // 去重後、依順位排好的人員清單
+let ALLDATES = [];    // 出現過的所有日期 (排序用)
+let COLINFO = null;   // 欄位偵測結果
+let sortState = { k: "ahead", dir: -1 };
+
+const $ = (s) => document.querySelector(s);
+const DOW = ["日","一","二","三","四","五","六"];
+
+/* ---------- 工具 ---------- */
+// 從一格文字抓出所有 M/D 日期，回傳 ["7/25", ...]
+function extractDates(val) {
+  if (val == null) return [];
+  const s = String(val);
+  if (s.includes("無此項需求")) return [];
+  const out = [];
+  const re = /(\d{1,2})\s*\/\s*(\d{1,2})/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    out.push(m[1] + "/" + m[2]);
+  }
+  return out;
+}
+function dateKey(md) { // "7/25" -> 725 方便排序
+  const [a, b] = md.split("/").map(Number);
+  return a * 100 + b;
+}
+// 用「今年」推算星期，僅供顯示參考（沒有年份就盡量推）
+function dowOf(md, year) {
+  const [m, d] = md.split("/").map(Number);
+  const dt = new Date(year, m - 1, d);
+  return DOW[dt.getDay()];
+}
+
+/* ---------- 解析 Excel ---------- */
+function parseWorkbook(arrbuf) {
+  const wb = XLSX.read(arrbuf, { type: "array", cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  if (!rows.length) throw new Error("檔案是空的。");
+
+  const header = rows[0].map((h) => (h == null ? "" : String(h).trim()));
+  const body = rows.slice(1).filter((r) => r.some((c) => c != null && String(c).trim() !== ""));
+  if (!body.length) throw new Error("找不到任何資料列。");
+
+  // 欄位偵測
+  const find = (pred) => header.findIndex(pred);
+  const tsCol = find((h) => h.includes("時間"));
+  const nameCol = find((h) => h === "姓名" || h.includes("姓名"));
+  const idCol = find((h) => h.includes("工號") || h.includes("工号"));
+  const emailCol = find((h) => h.includes("郵件") || h.toLowerCase().includes("email"));
+
+  if (nameCol < 0) throw new Error("找不到「姓名」欄位，請確認這是預選休假表單檔。");
+
+  // 日期欄：欄內多數格子含有日期樣式（排除時間戳記欄）
+  const dayCols = [];
+  for (let c = 0; c < header.length; c++) {
+    if (c === tsCol) continue;
+    let hit = 0, nonEmpty = 0;
+    for (const r of body) {
+      const v = r[c];
+      if (v == null || String(v).trim() === "") continue;
+      nonEmpty++;
+      if (extractDates(v).length) hit++;
+    }
+    if (hit >= 3 && hit >= nonEmpty * 0.05) {
+      dayCols.push({ col: c, label: shortLabel(header[c]) });
+    }
+  }
+  if (!dayCols.length) throw new Error("找不到任何含日期的欄位（預選休假/特休/補休）。");
+
+  COLINFO = { tsCol, nameCol, idCol, emailCol, dayCols };
+
+  // 建立人員 (保留原始列序 = 順位)
+  const raw = body.map((r, i) => {
+    // 收集此人所有日期，記住來源類型
+    const dayMap = new Map(); // "7/25" -> Set(types)
+    for (const dc of dayCols) {
+      for (const md of extractDates(r[dc.col])) {
+        if (!dayMap.has(md)) dayMap.set(md, new Set());
+        dayMap.get(md).add(dc.label);
+      }
+    }
+    let ts = tsCol >= 0 ? r[tsCol] : null;
+    ts = ts instanceof Date ? ts.getTime() : (ts != null ? Date.parse(ts) : NaN);
+    return {
+      order: i,
+      name: nameCol >= 0 ? safeStr(r[nameCol]) : "",
+      id: idCol >= 0 ? safeStr(r[idCol]) : "",
+      email: emailCol >= 0 ? safeStr(r[emailCol]).toLowerCase() : "",
+      ts: isNaN(ts) ? null : ts,
+      days: dayMap,
+    };
+  }).filter((p) => p.name);
+
+  // 去重：以 email > 工號 > 姓名 為鍵，保留時間最新者；位置取最新那筆的列序
+  const byKey = new Map();
+  for (const p of raw) {
+    const key = p.email || p.id || p.name;
+    const cur = byKey.get(key);
+    if (!cur) { byKey.set(key, p); continue; }
+    const a = cur.ts ?? -Infinity, b = p.ts ?? -Infinity;
+    byKey.set(key, b >= a ? p : cur);
+  }
+  const dupRemoved = raw.length - byKey.size;
+
+  PEOPLE = [...byKey.values()].sort((x, y) => x.order - y.order);
+
+  // 所有出現過的日期
+  const ds = new Set();
+  for (const p of PEOPLE) for (const d of p.days.keys()) ds.add(d);
+  ALLDATES = [...ds].sort((a, b) => dateKey(a) - dateKey(b));
+
+  return { total: raw.length, kept: PEOPLE.length, dupRemoved };
+}
+function safeStr(v) { return v == null ? "" : String(v).trim(); }
+function shortLabel(h) {
+  if (!h) return "其他";
+  if (h.includes("特休")) return "特休";
+  if (h.includes("福利")) return "福利補休";
+  if (h.includes("加班")) return "加班補休";
+  if (h.includes("預選休假") || /^1\./.test(h)) return "預選休假";
+  const m = h.match(/\[(.+?)\]/);
+  if (m) return m[1];
+  return h.length > 8 ? h.slice(0, 8) + "…" : h;
+}
+
+/* ---------- UI：填入名字下拉 ---------- */
+function fillNameSelect() {
+  const sel = $("#nameSel");
+  sel.innerHTML = '<option value="">— 請選擇 —</option>';
+  // 偵測同名
+  const nameCount = {};
+  PEOPLE.forEach((p) => { nameCount[p.name] = (nameCount[p.name] || 0) + 1; });
+  PEOPLE.forEach((p, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    const dupHint = nameCount[p.name] > 1 ? " ⚠同名" : "";
+    opt.textContent = `${p.name}${p.id ? " (" + p.id + ")" : ""}${dupHint} — 順位 ${idx + 1}`;
+    sel.appendChild(opt);
+  });
+}
+
+/* ---------- 計算並渲染結果 ---------- */
+function computeFor(idx) {
+  const me = PEOPLE[idx];
+  const ahead = PEOPLE.slice(0, idx);           // 排在我前面的人
+  const total = PEOPLE.length;
+
+  // 每個日期：前面有幾人選
+  const aheadCount = {};
+  for (const d of ALLDATES) aheadCount[d] = 0;
+  for (const p of ahead) for (const d of p.days.keys()) aheadCount[d]++;
+
+  const maxAhead = Math.max(1, ...ALLDATES.map((d) => aheadCount[d]));
+  const yearGuess = new Date().getFullYear();
+
+  // ribbon
+  $("#stPos").innerHTML = `第 <strong>${idx + 1}</strong> <small>/ ${total} 人</small>`;
+  $("#stDays").innerHTML = `${me.days.size} <small>天</small>`;
+  const myDatesSorted = [...me.days.keys()].sort((a, b) => dateKey(a) - dateKey(b));
+  const hot = myDatesSorted.map((d) => [d, aheadCount[d]]).sort((a, b) => b[1] - a[1])[0];
+  $("#stHot").innerHTML = hot ? `${hot[0]} <small>(前面 ${hot[1]} 人)</small>` : "—";
+
+  // 我選的每一天 cards
+  const wrap = $("#myDays");
+  wrap.innerHTML = "";
+  if (!myDatesSorted.length) {
+    wrap.innerHTML = '<div class="meta">這個人沒有填任何休假日期。</div>';
+  }
+  myDatesSorted.forEach((d) => {
+    const n = aheadCount[d];
+    const ratio = n / maxAhead;
+    const lvl = level(n, ahead.length);
+    const types = [...me.days.get(d)];
+    const el = document.createElement("div");
+    el.className = "day";
+    el.innerHTML = `
+      <div class="date">${d} <span class="dow">(${dowOf(d, yearGuess)})</span></div>
+      <div class="ahead">前面有 <b style="color:${lvl.color}">${n}</b> 人也選了這天</div>
+      <div class="bar"><i style="width:${Math.max(4, ratio*100)}%;background:${lvl.color}"></i></div>
+      <div style="margin-top:8px">
+        <span class="badge ${lvl.cls}">${lvl.text}</span>
+        ${types.map((t) => `<span class="pill-type">${t}</span>`).join("")}
+      </div>`;
+    wrap.appendChild(el);
+  });
+  $("#myDaysNote").textContent =
+    "說明：人數越多代表越多比你優先的人也想休這天，被排擠的風險越高（實際是否准假仍依各日名額而定）。";
+
+  // 完整表格
+  renderTable(aheadCount, maxAhead, new Set(me.days.keys()), ahead.length, yearGuess);
+  $("#cardResult").classList.remove("hidden");
+  $("#cardResult").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function level(n, aheadTotal) {
+  // 以「前面總人數」為基準分級
+  const r = aheadTotal ? n / aheadTotal : 0;
+  if (n === 0) return { cls: "b-cool", color: "var(--cool)", text: "前面沒人選" };
+  if (r >= 0.25 || n >= 8) return { cls: "b-hot", color: "var(--hot)", text: "競爭激烈" };
+  if (r >= 0.1 || n >= 4) return { cls: "b-warm", color: "var(--warm)", text: "偏熱門" };
+  return { cls: "b-cool", color: "var(--cool)", text: "相對安全" };
+}
+
+function renderTable(aheadCount, maxAhead, myset, aheadTotal, year) {
+  const tbody = $("#allTbl tbody");
+  let rows = ALLDATES.map((d) => ({
+    date: d, dkey: dateKey(d), dow: dowOf(d, year),
+    ahead: aheadCount[d], mine: myset.has(d) ? 1 : 0,
+  }));
+  const { k, dir } = sortState;
+  rows.sort((a, b) => {
+    let av = a[k], bv = b[k];
+    if (k === "date") { av = a.dkey; bv = b.dkey; }
+    if (k === "dow") { av = a.date && DOW.indexOf(a.dow); bv = DOW.indexOf(b.dow); }
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return a.dkey - b.dkey;
+  });
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    if (r.mine) tr.className = "mine";
+    const w = Math.max(2, (r.ahead / maxAhead) * 120);
+    const lvl = level(r.ahead, aheadTotal);
+    tr.innerHTML = `
+      <td><strong>${r.date}</strong></td>
+      <td>${r.dow}</td>
+      <td><span style="color:${lvl.color};font-weight:700">${r.ahead}</span></td>
+      <td><div class="minibar"><span style="width:${w}px;background:${lvl.color}"></span></div></td>
+      <td>${r.mine ? '<span class="tag-mine">✓ 我有選</span>' : ""}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ---------- 事件 ---------- */
+const drop = $("#drop"), fileInput = $("#file");
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault(); drop.classList.remove("drag");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function handleFile(file) {
+  $("#loadErr").classList.add("hidden");
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const info = parseWorkbook(ev.target.result);
+      fillNameSelect();
+      $("#cardPick").classList.remove("hidden");
+      $("#cardResult").classList.add("hidden");
+      const typeList = COLINFO.dayCols.map((d) => d.label).join("、");
+      $("#loadMeta").innerHTML =
+        `已載入 <b>${info.kept}</b> 人（原始 ${info.total} 筆，去除重複 ${info.dupRemoved} 筆）。` +
+        `偵測到日期欄位：${typeList}。`;
+      $("#nameSel").focus();
+    } catch (err) {
+      const box = $("#loadErr");
+      box.textContent = "讀取失敗：" + err.message;
+      box.classList.remove("hidden");
+    }
+  };
+  reader.onerror = () => {
+    const box = $("#loadErr");
+    box.textContent = "無法讀取檔案。";
+    box.classList.remove("hidden");
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+$("#nameSel").addEventListener("change", (e) => {
+  const v = e.target.value;
+  if (v === "") { $("#cardResult").classList.add("hidden"); return; }
+  computeFor(Number(v));
+});
+
+$("#reload").addEventListener("click", () => {
+  PEOPLE = []; ALLDATES = []; COLINFO = null;
+  fileInput.value = "";
+  $("#cardPick").classList.add("hidden");
+  $("#cardResult").classList.add("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+// 表頭排序
+document.querySelectorAll("#allTbl th.sortable").forEach((th) => {
+  th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    if (sortState.k === k) sortState.dir *= -1;
+    else sortState = { k, dir: k === "ahead" ? -1 : 1 };
+    const v = $("#nameSel").value;
+    if (v !== "") computeFor(Number(v));
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 含個資的 Excel 與暫存檔，絕對不要上傳到公開 repo
+*.xlsx
+*.xls
+~$*
