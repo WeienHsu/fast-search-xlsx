@@ -69,6 +69,21 @@
   }
   select:focus, input:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
   .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  /* searchable name combobox */
+  .combo { position: relative; }
+  .combo-list {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); max-height: 280px; overflow-y: auto; padding: 4px;
+  }
+  .combo-item {
+    padding: 9px 11px; border-radius: 8px; cursor: pointer; font-size: 14px;
+    display: flex; justify-content: space-between; gap: 10px; align-items: center;
+  }
+  .combo-item:hover, .combo-item.active { background: var(--brand-soft); }
+  .combo-item .pos { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .combo-item.dup .nm { color: var(--warm); }
+  .combo-empty { padding: 10px 11px; color: var(--muted); font-size: 13px; }
   .hidden { display: none !important; }
   /* result header */
   .ribbon {
@@ -176,8 +191,11 @@
   <div class="card hidden" id="cardPick">
     <div class="row">
       <div class="field">
-        <label class="lbl" for="nameSel">選擇你的名字</label>
-        <select id="nameSel"></select>
+        <label class="lbl" for="nameSearch">選擇你的名字</label>
+        <div class="combo" id="nameCombo">
+          <input type="search" id="nameSearch" autocomplete="off" placeholder="輸入姓名搜尋…" />
+          <div class="combo-list hidden" id="nameList"></div>
+        </div>
       </div>
       <div style="padding-bottom:2px">
         <button class="reset" id="reload">↺ 換一個檔案</button>
@@ -249,6 +267,10 @@ let PEOPLE = [];      // 去重後、依順位排好的人員清單
 let ALLDATES = [];    // 出現過的所有日期 (排序用)
 let COLINFO = null;   // 欄位偵測結果
 let sortState = { k: "ahead", dir: -1 };
+let selectedIdx = null;  // 目前選定的人員索引
+let nameDupSet = null;   // 同名集合
+let comboItems = [];     // 下拉目前過濾後的清單
+let comboActive = -1;    // 鍵盤高亮位置
 
 const $ = (s) => document.querySelector(s);
 const DOW = ["日","一","二","三","四","五","六"];
@@ -268,7 +290,7 @@ function matchDates(val) {
 }
 
 // 取得某個儲存格「有效」的日期：
-//  1. 含「不受理」或「暫停」整格作廢 → []
+//  1. 含「暫停」整格作廢 → []（整列作廢的關鍵字見 isOverdueRow）
 //  2. 整格被劃刪除線（struckSet）→ []
 //  3. 格內部分文字被劃刪除線（cell.h 的 <s>…</s>）→ 排除那幾天，保留其餘
 function cellDates(ws, R, C, struckSet) {
@@ -276,7 +298,7 @@ function cellDates(ws, R, C, struckSet) {
   const cell = ws[addr];
   if (!cell || cell.v == null) return [];
   const text = String(cell.v);
-  if (text.includes("不受理") || text.includes("暫停")) return [];
+  if (text.includes("暫停")) return [];
   if (struckSet.has(addr)) return [];
   const struck = new Set();
   if (cell.h && cell.h.indexOf("<s>") >= 0) {
@@ -284,6 +306,20 @@ function cellDates(ws, R, C, struckSet) {
       .forEach((seg) => matchDates(seg).forEach((d) => struck.add(d)));
   }
   return matchDates(text).filter((d) => !struck.has(d));
+}
+
+// 整列逾時作廢：任一格含「逾時/已超過/不計算/不受理」→ 整筆不計（所有假別欄都排除）
+function isOverdueRow(cells) {
+  return cells.some((c) => {
+    if (c == null) return false;
+    const s = String(c);
+    return s.includes("逾時") || s.includes("已超過") || s.includes("不計算") || s.includes("不受理");
+  });
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 /* ---------- 讀取整格刪除線（SheetJS 不解析字型，需自行解 zip/XML） ---------- */
@@ -413,10 +449,11 @@ async function parseWorkbook(arrbuf) {
 
   COLINFO = { tsCol, nameCol, idCol, emailCol, dayCols };
 
-  // 建立人員 (保留原始列序 = 順位)；整列被劃刪除線者（姓名格被劃）整筆作廢
+  // 建立人員 (保留原始列序 = 順位)；整列被劃刪除線者（姓名格被劃）或逾時者整筆作廢
   let voidRows = 0;
   const raw = body.map(({ R, cells }, i) => {
     if (struckSet.has(XLSX.utils.encode_cell({ r: R, c: nameCol }))) { voidRows++; return null; }
+    if (isOverdueRow(cells)) { voidRows++; return null; }
     // 收集此人所有有效日期，記住來源類型
     const dayMap = new Map(); // "7/25" -> Set(types)
     for (const dc of dayCols) {
@@ -473,20 +510,55 @@ function shortLabel(h) {
   return h.length > 8 ? h.slice(0, 8) + "…" : h;
 }
 
-/* ---------- UI：填入名字下拉 ---------- */
+/* ---------- UI：可搜尋姓名組合框 ---------- */
 function fillNameSelect() {
-  const sel = $("#nameSel");
-  sel.innerHTML = '<option value="">— 請選擇 —</option>';
   // 偵測同名
   const nameCount = {};
   PEOPLE.forEach((p) => { nameCount[p.name] = (nameCount[p.name] || 0) + 1; });
-  PEOPLE.forEach((p, idx) => {
-    const opt = document.createElement("option");
-    opt.value = String(idx);
-    const dupHint = nameCount[p.name] > 1 ? " ⚠同名" : "";
-    opt.textContent = `${p.name}${p.id ? " (" + p.id + ")" : ""}${dupHint} — 順位 ${idx + 1}`;
-    sel.appendChild(opt);
-  });
+  nameDupSet = new Set(Object.keys(nameCount).filter((n) => nameCount[n] > 1));
+  selectedIdx = null;
+  $("#nameSearch").value = "";
+  renderNameList("");
+}
+
+// 依查詢字串過濾人員清單（比對姓名或工號）
+function renderNameList(q) {
+  const query = q.trim().toLowerCase();
+  comboItems = PEOPLE
+    .map((p, idx) => ({ p, idx }))
+    .filter(({ p }) => !query ||
+      p.name.toLowerCase().includes(query) ||
+      (p.id && String(p.id).toLowerCase().includes(query)));
+  comboActive = comboItems.length ? 0 : -1;
+  paintNameList();
+}
+
+function paintNameList() {
+  const list = $("#nameList");
+  if (!comboItems.length) {
+    list.innerHTML = '<div class="combo-empty">找不到符合的姓名</div>';
+    return;
+  }
+  list.innerHTML = comboItems.map(({ p, idx }, i) => {
+    const dup = nameDupSet.has(p.name);
+    return `<div class="combo-item${dup ? " dup" : ""}${i === comboActive ? " active" : ""}" data-idx="${idx}">
+      <span class="nm">${esc(p.name)}${p.id ? " (" + esc(p.id) + ")" : ""}${dup ? " ⚠同名" : ""}</span>
+      <span class="pos">順位 ${idx + 1}</span>
+    </div>`;
+  }).join("");
+}
+
+function selectName(idx) {
+  selectedIdx = idx;
+  const p = PEOPLE[idx];
+  $("#nameSearch").value = `${p.name}${p.id ? " (" + p.id + ")" : ""} — 順位 ${idx + 1}`;
+  $("#nameList").classList.add("hidden");
+  computeFor(idx);
+}
+
+function ensureActiveVisible() {
+  const el = $("#nameList").children[comboActive];
+  if (el) el.scrollIntoView({ block: "nearest" });
 }
 
 /* ---------- 計算並渲染結果 ---------- */
@@ -697,11 +769,11 @@ function handleFile(file) {
       $("#cardPick").classList.remove("hidden");
       $("#cardResult").classList.add("hidden");
       const typeList = COLINFO.dayCols.map((d) => d.label).join("、");
-      const voidNote = info.voidRows ? `，剔除整筆作廢（劃刪除線）${info.voidRows} 筆` : "";
+      const voidNote = info.voidRows ? `，剔除整筆作廢（劃刪除線／逾時）${info.voidRows} 筆` : "";
       $("#loadMeta").innerHTML =
         `已載入 <b>${info.kept}</b> 人（原始 ${info.total} 筆，去除重複 ${info.dupRemoved} 筆${voidNote}）。` +
-        `偵測到日期欄位：${typeList}。已自動排除被劃刪除線的日期與標註「不受理」的格子。`;
-      $("#nameSel").focus();
+        `偵測到日期欄位：${typeList}。已自動排除被劃刪除線的日期、整筆逾時／不受理，以及標註「暫停」的格子。`;
+      $("#nameSearch").focus();
     } catch (err) {
       const box = $("#loadErr");
       box.textContent = "讀取失敗：" + err.message;
@@ -716,14 +788,50 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-$("#nameSel").addEventListener("change", (e) => {
-  const v = e.target.value;
-  if (v === "") { $("#cardResult").classList.add("hidden"); return; }
-  computeFor(Number(v));
+const nameSearch = $("#nameSearch"), nameList = $("#nameList");
+nameSearch.addEventListener("input", () => {
+  selectedIdx = null;
+  renderNameList(nameSearch.value);
+  nameList.classList.remove("hidden");
+  $("#cardResult").classList.add("hidden");
+});
+nameSearch.addEventListener("focus", () => {
+  nameSearch.select();          // 全選，方便直接打字重選
+  renderNameList("");           // 顯示完整清單
+  nameList.classList.remove("hidden");
+});
+nameSearch.addEventListener("blur", () => nameList.classList.add("hidden"));
+nameSearch.addEventListener("keydown", (e) => {
+  if (nameList.classList.contains("hidden")) {
+    if (e.key === "ArrowDown") { renderNameList(nameSearch.value); nameList.classList.remove("hidden"); }
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (comboItems.length) { comboActive = (comboActive + 1) % comboItems.length; paintNameList(); ensureActiveVisible(); }
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (comboItems.length) { comboActive = (comboActive - 1 + comboItems.length) % comboItems.length; paintNameList(); ensureActiveVisible(); }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (comboActive >= 0 && comboItems[comboActive]) selectName(comboItems[comboActive].idx);
+  } else if (e.key === "Escape") {
+    nameList.classList.add("hidden");
+  }
+});
+// 用 mousedown + preventDefault，避免 input blur 搶在點擊前關閉清單
+nameList.addEventListener("mousedown", (e) => {
+  const item = e.target.closest(".combo-item");
+  if (!item) return;
+  e.preventDefault();
+  selectName(Number(item.dataset.idx));
 });
 
 $("#reload").addEventListener("click", () => {
   PEOPLE = []; ALLDATES = []; COLINFO = null;
+  selectedIdx = null;
+  $("#nameSearch").value = "";
+  $("#nameList").classList.add("hidden");
   fileInput.value = "";
   $("#cardPick").classList.add("hidden");
   $("#cardResult").classList.add("hidden");
@@ -749,8 +857,7 @@ document.querySelectorAll("#allTbl th.sortable").forEach((th) => {
     const k = th.dataset.k;
     if (sortState.k === k) sortState.dir *= -1;
     else sortState = { k, dir: k === "ahead" ? -1 : 1 };
-    const v = $("#nameSel").value;
-    if (v !== "") computeFor(Number(v));
+    if (selectedIdx != null) computeFor(selectedIdx);
   });
 });
 </script>
